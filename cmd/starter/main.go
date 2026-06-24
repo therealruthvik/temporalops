@@ -252,5 +252,6 @@ func runStatus(c client.Client, args []string) {
 	if err := resp.Get(&phase); err != nil {
 		log.Fatalf("decode query result: %v", err)
 	}
-	log.Printf("phase: %s", phase)
+	// Print to stdout (it is data, not a log line) so callers can capture it.
+	fmt.Printf("phase: %s\n", phase)
 }

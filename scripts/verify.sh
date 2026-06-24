@@ -122,37 +122,56 @@ fi
 start_worker
 if grep -q 'Started Worker' "$WORKER_LOG"; then ok "worker started and polling"; else bad "worker did not start"; cat "$WORKER_LOG"; fi
 
+# wait_until_phase polls a workflow's phase until it reaches $2, or a terminal
+# phase, or $3 seconds elapse. This makes the approval step robust: we approve
+# only once the canary has actually baked and reached the gate, instead of
+# guessing with a fixed sleep that a slow image pull could outrun.
+wait_until_phase() {
+  local id="$1" want="$2" timeout="${3:-90}" i p
+  for ((i = 0; i < timeout; i++)); do
+    p="$(./bin/starter status --id "$id" 2>/dev/null | grep -o 'phase: .*' | cut -d' ' -f2)"
+    [ "$p" = "$want" ] && return 0
+    case "$p" in promoted | policy-rejected) return 1 ;; esac
+    sleep 1
+  done
+  return 1
+}
+
+# Bakes are generous: the canary pod must pass its readiness probe within the
+# bake window, and a cold image pull on a loaded machine can be slow. The
+# outcome (Promoted/RolledBack/...) is read with `temporal workflow result`,
+# which blocks until the workflow completes, so these assertions are not racy.
 section "workflow outcome paths"
 # Happy path: approved promotion.
 HAPPY="verify-happy-$$"
-./bin/starter canary --id "$HAPPY" --service web --tag nginx:1.27-alpine --bake 15 --approval-timeout 3m >/dev/null 2>&1
-sleep 17
-./bin/starter approve --id "$HAPPY" --actor verifier >/dev/null 2>&1
-sleep 5
+./bin/starter canary --id "$HAPPY" --service web --tag nginx:1.27-alpine --bake 20 --approval-timeout 5m >/dev/null 2>&1
+if wait_until_phase "$HAPPY" "awaiting-approval" 120; then
+  ./bin/starter approve --id "$HAPPY" --actor verifier >/dev/null 2>&1
+else
+  bad "happy path never reached the approval gate (canary did not bake healthy)"
+fi
 assert_status "$HAPPY" "Promoted" "happy path (approve)"
 
 # Policy gate: unapproved image rejected by Kyverno.
 POLICY="verify-policy-$$"
-./bin/starter canary --id "$POLICY" --service web --tag busybox:1.36 --bake 5 --approval-timeout 1m --wait >/dev/null 2>&1
+./bin/starter canary --id "$POLICY" --service web --tag busybox:1.36 --bake 5 --approval-timeout 1m >/dev/null 2>&1
 assert_status "$POLICY" "PolicyRejected" "policy gate (busybox denied)"
 
-# Health rollback: bad image never becomes ready.
+# Health rollback: bad image never becomes ready (independent of timing).
 HEALTH="verify-health-$$"
 ./bin/starter canary --id "$HEALTH" --service web --tag nginx:does-not-exist-9999 --bake 12 --approval-timeout 2m >/dev/null 2>&1
-sleep 16
 assert_status "$HEALTH" "RolledBack" "health rollback (bad image)"
 
-# Approval timeout: no signal sent.
+# Approval timeout: a healthy canary reaches the gate, then no signal arrives.
 TIMEOUT="verify-timeout-$$"
-./bin/starter canary --id "$TIMEOUT" --service web --tag nginx:1.27-alpine --bake 8 --approval-timeout 12s >/dev/null 2>&1
-sleep 26
+./bin/starter canary --id "$TIMEOUT" --service web --tag nginx:1.27-alpine --bake 20 --approval-timeout 12s >/dev/null 2>&1
 assert_status "$TIMEOUT" "TimedOut" "approval timeout (no signal)"
 
-# Multi-service fan-out.
-if ./bin/starter release --services web,api --tag nginx:1.27-alpine --bake 8 2>&1 | grep -q 'allPromoted=true'; then
+# Multi-service fan-out (auto-promote; each child must bake healthy).
+if ./bin/starter release --services web,api --tag nginx:1.27-alpine --bake 20 2>&1 | grep -q 'allPromoted=true'; then
   ok "release fan-out (web,api both promoted)"
 else
-  bad "release fan-out did not report allPromoted=true"
+  bad "release fan-out did not report allPromoted=true (a child may not have baked healthy in time)"
 fi
 
 section "audit log"
