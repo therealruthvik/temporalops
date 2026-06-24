@@ -150,6 +150,7 @@ func CanaryDeployWorkflow(ctx workflow.Context, in CanaryInput) (CanaryResult, e
 	if in.AutoPromote {
 		// Release-level approval already happened; promote without waiting.
 		res.Actor = "auto-release"
+		recordApproval(ctx, "auto-release", "auto", "promoted via release orchestrator")
 	} else {
 		phase = "awaiting-approval"
 		signal, timedOut := waitForApproval(ctx, in.ApprovalTimeout)
@@ -158,9 +159,13 @@ func CanaryDeployWorkflow(ctx workflow.Context, in CanaryInput) (CanaryResult, e
 		switch {
 		case timedOut:
 			logger.Info("approval timed out, rolling back")
+			recordApproval(ctx, "", "timeout", "no approval within "+in.ApprovalTimeout.String())
 			return unwind(ctx, saga, &res, StatusTimedOut, "no approval within "+in.ApprovalTimeout.String())
 		case !signal.Approve:
+			recordApproval(ctx, signal.Actor, "rejected", "promotion rejected")
 			return unwind(ctx, saga, &res, StatusRolledBack, "promotion rejected by "+signal.Actor)
+		default:
+			recordApproval(ctx, signal.Actor, "approved", "promotion approved")
 		}
 	}
 
@@ -202,6 +207,17 @@ func alert(ctx workflow.Context, res CanaryResult) {
 		activities.Alert,
 		activities.AlertInput{Service: res.Service, Status: string(res.Status), Reason: res.Reason},
 	).Get(disconnected, nil)
+}
+
+// recordApproval writes the approval decision (with actor) to the audit log.
+// Best-effort: an audit write failure must not block a deploy, so the error is
+// ignored here — the activity itself logs failures.
+func recordApproval(ctx workflow.Context, actor, decision, detail string) {
+	_ = workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, alertOpts()),
+		activities.RecordApproval,
+		activities.ApprovalAudit{Actor: actor, Decision: decision, Detail: detail},
+	).Get(ctx, nil)
 }
 
 // waitForApproval blocks on the approve-promote signal or the timeout,

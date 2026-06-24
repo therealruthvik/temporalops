@@ -1,4 +1,4 @@
-.PHONY: deps server worker hello canary release approve status test cluster cluster-reset cluster-down kyverno tidy fmt vet clean
+.PHONY: deps server worker hello canary release approve status audit test cluster cluster-reset cluster-down kyverno tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -46,6 +46,11 @@ approve:
 # Query a workflow's current phase: make status ID=<workflow-id>
 status:
 	go run ./cmd/starter status --id "$(ID)"
+
+# Stage 6: print the append-only audit trail for a workflow.
+#   make audit ID=<workflow-id>
+audit:
+	go run ./cmd/starter audit --id "$(ID)"
 
 # Run the workflow unit tests (saga, signal gate, timeout — no infra needed).
 test:

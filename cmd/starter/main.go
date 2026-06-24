@@ -19,6 +19,8 @@ import (
 
 	"go.temporal.io/sdk/client"
 
+	"github.com/therealruthvik/temporalops/internal/audit"
+	"github.com/therealruthvik/temporalops/internal/config"
 	"github.com/therealruthvik/temporalops/internal/workflows"
 )
 
@@ -50,14 +52,49 @@ func main() {
 		runApprove(c, args)
 	case "status":
 		runStatus(c, args)
+	case "audit":
+		runAudit(args)
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: starter <hello|canary|release|approve|status> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: starter <hello|canary|release|approve|status|audit> [flags]")
 	os.Exit(2)
+}
+
+func runAudit(args []string) {
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	id := fs.String("id", "", "workflow id to show the audit trail for")
+	_ = fs.Parse(args)
+	if *id == "" {
+		log.Fatal("--id is required")
+	}
+
+	store, err := audit.Open(config.AuditDBPath())
+	if err != nil {
+		log.Fatalf("open audit db: %v", err)
+	}
+	defer store.Close()
+
+	entries, err := store.QueryByWorkflow(*id)
+	if err != nil {
+		log.Fatalf("query audit log: %v", err)
+	}
+	if len(entries) == 0 {
+		fmt.Printf("no audit entries for %s\n", *id)
+		return
+	}
+	fmt.Printf("audit trail for %s (%d entries)\n", *id, len(entries))
+	for _, e := range entries {
+		actor := e.Actor
+		if actor == "" {
+			actor = "-"
+		}
+		fmt.Printf("  %s  %-16s %-9s %-10s actor=%-12s %s\n",
+			e.Timestamp.Format("15:04:05"), e.ActivityType, e.Phase, e.Status, actor, e.Detail)
+	}
 }
 
 func runHello(c client.Client, args []string) {

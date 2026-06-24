@@ -36,6 +36,7 @@ func TestCanary_HappyPath(t *testing.T) {
 	env.OnActivity(activities.HealthCheck, mock.Anything, mock.Anything).Return(activities.HealthResult{Healthy: true}, nil)
 	env.OnActivity(activities.ShiftTraffic, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.Promote, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(activities.RecordApproval, mock.Anything, mock.Anything).Return(nil)
 
 	// Send the approval shortly after the workflow reaches the gate.
 	env.RegisterDelayedCallback(func() {
@@ -114,6 +115,7 @@ func TestCanary_ApprovalTimeoutRollsBack(t *testing.T) {
 	env.OnActivity(activities.ShiftTrafficBack, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.ScaleDownCanary, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.Alert, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(activities.RecordApproval, mock.Anything, mock.Anything).Return(nil)
 	// Promote intentionally not mocked: it must never run on a timeout.
 
 	env.ExecuteWorkflow(CanaryDeployWorkflow, baseInput())
@@ -139,6 +141,7 @@ func TestCanary_RejectionRollsBack(t *testing.T) {
 	env.OnActivity(activities.ShiftTrafficBack, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.ScaleDownCanary, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(activities.Alert, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(activities.RecordApproval, mock.Anything, mock.Anything).Return(nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(ApprovePromoteSignal, ApprovalSignal{Approve: false, Actor: "bob"})

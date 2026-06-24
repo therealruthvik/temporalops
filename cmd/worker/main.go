@@ -1,26 +1,42 @@
 // Command worker runs the Temporal worker process: it connects to the dev
 // server, registers every workflow and activity, and polls the shared task
 // queue. Killing and restarting this process is the core of the durability
-// demo in later stages — Temporal replays history so the workflow resumes
-// from its last completed step.
+// demo (Stage 7) — Temporal replays history so the workflow resumes from its
+// last completed step.
 package main
 
 import (
 	"log"
-	"os"
+	"path/filepath"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/therealruthvik/temporalops/internal/activities"
+	"github.com/therealruthvik/temporalops/internal/audit"
+	"github.com/therealruthvik/temporalops/internal/config"
 	"github.com/therealruthvik/temporalops/internal/workflows"
+	"os"
 )
 
 func main() {
-	hostPort := os.Getenv("TEMPORAL_ADDRESS")
-	if hostPort == "" {
-		hostPort = client.DefaultHostPort // 127.0.0.1:7233
+	hostPort := config.TemporalAddress()
+
+	// Open the append-only audit log and register it as the process default so
+	// the interceptor and the RecordApproval activity write to it.
+	auditPath := config.AuditDBPath()
+	if dir := filepath.Dir(auditPath); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatalf("create audit dir: %v", err)
+		}
 	}
+	store, err := audit.Open(auditPath)
+	if err != nil {
+		log.Fatalf("open audit store: %v", err)
+	}
+	defer store.Close()
+	audit.SetDefault(store)
 
 	c, err := client.Dial(client.Options{HostPort: hostPort})
 	if err != nil {
@@ -28,7 +44,10 @@ func main() {
 	}
 	defer c.Close()
 
-	w := worker.New(c, workflows.TaskQueue, worker.Options{})
+	w := worker.New(c, workflows.TaskQueue, worker.Options{
+		// The audit interceptor records every activity start/end automatically.
+		Interceptors: []interceptor.WorkerInterceptor{audit.NewWorkerInterceptor(store)},
+	})
 
 	w.RegisterWorkflow(workflows.HelloWorkflow)
 	w.RegisterWorkflow(workflows.CanaryDeployWorkflow)
@@ -43,8 +62,9 @@ func main() {
 	w.RegisterActivity(activities.ShiftTrafficBack)
 	w.RegisterActivity(activities.Promote)
 	w.RegisterActivity(activities.Alert)
+	w.RegisterActivity(activities.RecordApproval)
 
-	log.Printf("worker polling task queue %q at %s", workflows.TaskQueue, hostPort)
+	log.Printf("worker polling task queue %q at %s (audit: %s)", workflows.TaskQueue, hostPort, auditPath)
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		log.Fatalf("worker stopped: %v", err)
 	}

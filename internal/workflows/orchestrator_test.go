@@ -35,6 +35,7 @@ func TestRelease_PartialFailureSurfaced(t *testing.T) {
 	env.OnActivity(activities.Promote, mock.Anything, mock.Anything).Return(nil)      // web only
 	env.OnActivity(activities.ScaleDownCanary, mock.Anything, mock.Anything).Return(nil) // api rollback
 	env.OnActivity(activities.Alert, mock.Anything, mock.Anything).Return(nil)           // api rollback
+	env.OnActivity(activities.RecordApproval, mock.Anything, mock.Anything).Return(nil)  // auto-promote audit (web)
 
 	in := ReleaseInput{
 		ReleaseID: "release-test",

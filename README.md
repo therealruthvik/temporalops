@@ -25,6 +25,7 @@ Built incrementally. Current stage: **3 — real Kubernetes against a kind clust
 | 3 | Real K8s API calls against a kind cluster | ✅ |
 | 4 | Kyverno policy check (signed/scanned image gate) | ✅ |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | ✅ |
+| 6 | Append-only audit log (SQLite) | ✅ |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
 | 6 | Append-only audit log | |
@@ -239,6 +240,45 @@ Design points:
 
 Verified against kind: a `web,api` release fans out two child workflows
 (`release-…-web`, `release-…-api`) that both promote, updating both Deployments.
+
+## Stage 6: append-only audit log
+
+Every activity start/end and every approval decision is written to an
+append-only SQLite table (`internal/audit/`), tagged with workflow ID, run ID,
+timestamp, and — for approvals — the actor. This is the queryable compliance
+artifact.
+
+Activity rows are captured by a **worker interceptor**
+(`audit.NewWorkerInterceptor`) rather than by calls inside each activity, so the
+log captures every activity uniformly with no per-activity boilerplate. The
+approval actor (which only the workflow knows, from the signal) is recorded by a
+dedicated `RecordApproval` activity.
+
+```sh
+make audit ID=<workflow-id>
+```
+
+```
+audit trail for canary-web-… (14 entries)
+  06:51:00  PolicyCheck     start  started    actor=-       
+  06:51:00  PolicyCheck     end    completed  actor=-       
+  06:51:00  ScaleCanary     start  started    actor=-       
+  …
+  06:51:12  RecordApproval  approval approved actor=alice    promotion approved
+  06:51:12  Promote         start  started    actor=-       
+  06:51:12  Promote         end    completed  actor=-       
+```
+
+It is queryable with plain SQL — the file is `audit/audit.db`:
+
+```sh
+sqlite3 audit/audit.db \
+  "SELECT ts, activity_type, status, actor FROM audit_log WHERE actor != '';"
+```
+
+Writes are idempotent on `(workflow_id, run_id, activity_id, attempt, phase)`
+via `INSERT OR IGNORE`, so a retried workflow task never duplicates rows — the
+log stays trustworthy across the crashes exercised in Stage 7.
 
 ## Layout
 
