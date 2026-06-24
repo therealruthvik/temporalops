@@ -1,0 +1,21 @@
+# Build output
+/bin/
+*.exe
+
+# Audit log runtime output (regenerated per run)
+/audit/*.db
+/audit/*.jsonl
+/audit/*.db-journal
+
+# Temporal dev server state (if file-backed)
+*.sqlite
+temporal.db
+
+# Local env overrides
+.env
+.env.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
