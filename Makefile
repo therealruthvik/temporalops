@@ -1,4 +1,4 @@
-.PHONY: deps server worker hello canary approve status test tidy fmt vet clean
+.PHONY: deps server worker hello canary approve status test cluster cluster-reset cluster-down tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -42,6 +42,19 @@ status:
 # Run the workflow unit tests (saga, signal gate, timeout — no infra needed).
 test:
 	go test ./...
+
+# Stage 3: create the kind cluster and deploy the sample app (idempotent).
+cluster:
+	./scripts/setup-cluster.sh
+
+# Reset the sample app to its baseline (stable image, canary at zero).
+cluster-reset:
+	kubectl apply -f deploy/k8s/sample-app.yaml
+	kubectl -n temporalops rollout status deployment/web-stable --timeout=120s
+
+# Delete the kind cluster.
+cluster-down:
+	kind delete cluster --name $(or $(CLUSTER),temporalops)
 
 fmt:
 	go fmt ./...

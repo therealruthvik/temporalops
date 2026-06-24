@@ -124,7 +124,7 @@ func CanaryDeployWorkflow(ctx workflow.Context, in CanaryInput) (CanaryResult, e
 	err = workflow.ExecuteActivity(
 		workflow.WithActivityOptions(ctx, trafficOpts()),
 		activities.ShiftTraffic,
-		activities.TrafficInput{Service: in.Service, CanaryWeight: 50, SimulateFail: in.SimulateTrafficFail},
+		activities.TrafficInput{Service: in.Service, CanaryWeight: 50, TargetReplicas: in.TargetReplicas, SimulateFail: in.SimulateTrafficFail},
 	).Get(ctx, nil)
 	if err != nil {
 		return unwind(ctx, saga, &res, StatusRolledBack, "shift traffic failed: "+err.Error())
@@ -133,7 +133,7 @@ func CanaryDeployWorkflow(ctx workflow.Context, in CanaryInput) (CanaryResult, e
 		return workflow.ExecuteActivity(
 			workflow.WithActivityOptions(c, trafficOpts()),
 			activities.ShiftTrafficBack,
-			activities.TrafficInput{Service: in.Service, CanaryWeight: 0},
+			activities.TrafficInput{Service: in.Service, CanaryWeight: 0, TargetReplicas: in.TargetReplicas},
 		).Get(c, nil)
 	})
 

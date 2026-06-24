@@ -80,7 +80,7 @@ func runHello(c client.Client, args []string) {
 func runCanary(c client.Client, args []string) {
 	fs := flag.NewFlagSet("canary", flag.ExitOnError)
 	service := fs.String("service", "web", "service name")
-	tag := fs.String("tag", "v2", "image tag to deploy")
+	tag := fs.String("tag", "nginx:1.27-alpine", "full image reference to deploy as the canary")
 	replicas := fs.Int("replicas", 3, "target replica count")
 	canaryReplicas := fs.Int("canary-replicas", 1, "canary replica count")
 	bake := fs.Int("bake", 15, "bake duration in seconds")

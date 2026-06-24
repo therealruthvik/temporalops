@@ -16,13 +16,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and rationale.
 
 ## Status
 
-Built incrementally. Current stage: **2 — CanaryDeployWorkflow (mocked activities)**.
+Built incrementally. Current stage: **3 — real Kubernetes against a kind cluster**.
 
 | Stage | Scope | Done |
 |------:|-------|:----:|
 | 1 | Temporal dev server + hello-world workflow | ✅ |
 | 2 | CanaryDeployWorkflow with mocked activities (saga, signal gate, timeout) | ✅ |
-| 3 | Real K8s API calls against a kind cluster | |
+| 3 | Real K8s API calls against a kind cluster | ✅ |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
 | 6 | Append-only audit log | |
@@ -113,7 +113,7 @@ make canary SERVICE=cache APPROVAL=15s           # don't approve -> TimedOut
 Open the workflow in the Web UI (http://localhost:8233) to see the saga
 compensations and the AlertActivity in the event history.
 
-#### Design notes
+#### Design notes (Stage 2)
 
 - A rollback or timeout is returned as a **normal workflow result** with a
   `RolledBack` / `TimedOut` status, not a workflow error — the workflow
@@ -124,6 +124,54 @@ compensations and the AlertActivity in the event history.
   disconnected context so they complete even during cancellation.
 - Every activity has an explicit `RetryPolicy`; the rationale for each choice is
   commented at the definition in `internal/workflows/canary.go`.
+
+## Stage 3: real Kubernetes (kind)
+
+The activities now drive a real cluster via `client-go` instead of returning
+mocked results. The workflow, saga, and signal logic are unchanged — only the
+activity internals (`internal/activities/k8s_client.go` and the scale/health/
+traffic/promote activities) became real.
+
+**Traffic model (replica-ratio):** each service maps to two Deployments,
+`<svc>-stable` and `<svc>-canary`, behind a single Service. Shifting traffic
+means adjusting the replica split; promotion rolls the new image onto stable and
+retires the canary. The pod readiness probe is the "synthetic health endpoint"
+the HealthCheck activity observes.
+
+### Setup
+
+```sh
+make cluster        # kind create + deploy sample app (web-stable x3, web-canary x0)
+make server         # terminal 2
+make worker         # terminal 3 — uses your current kubecontext (kind-temporalops)
+```
+
+### Demo
+
+```sh
+# Healthy rollout: canary comes up, bakes, you approve, stable adopts the image.
+make canary SERVICE=web TAG=nginx:1.27-alpine BAKE=15 APPROVAL=2m
+make approve ID=<workflow-id> ACTOR=alice
+kubectl -n temporalops get deploy -l app=web        # web-stable now runs the new image
+
+# Unhealthy rollout: a bad image never becomes Ready, so the bake fails and the
+# saga scales the canary back down — stable is never touched.
+make canary SERVICE=web TAG=nginx:does-not-exist BAKE=10
+kubectl -n temporalops get pods -l role=canary      # ErrImagePull during bake
+# -> workflow result: RolledBack ("canary N/M replicas ready after bake")
+
+make cluster-reset  # return the sample app to baseline
+```
+
+Verified end to end against kind: a healthy deploy promotes (stable image
+swapped to the new tag), and an unhealthy deploy (bad image, pods stuck in
+`ErrImagePull`) is detected at the bake and rolled back with no change to
+stable.
+
+> Idempotency: `scaleDeployment` performs no write when the desired replica
+> count already matches observed state, and `setImage` re-applies the same image
+> as a no-op — so an activity retry or a post-crash re-run (Stage 7) produces no
+> duplicate side effect.
 
 ## Layout
 

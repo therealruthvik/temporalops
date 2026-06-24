@@ -1,0 +1,108 @@
+# Sample app for the canary demo. Two Deployments — stable and canary — sit
+# behind a single Service. Because the Service selects both (app=web), the
+# traffic split approximates the stable:canary replica ratio. This is the
+# "replica-ratio" traffic model: shifting traffic == adjusting replica counts,
+# which needs no service mesh and is honest about being an approximation.
+#
+# Container name is "app" in both Deployments; the orchestrator patches that
+# container's image to roll a new version onto the canary, then onto stable at
+# promotion. The readiness probe is the "synthetic health endpoint" the
+# HealthCheck activity observes: a pod is in rotation only once it passes.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-stable
+  namespace: temporalops
+  labels:
+    app: web
+    role: stable
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+      role: stable
+  template:
+    metadata:
+      labels:
+        app: web
+        role: stable
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-canary
+  namespace: temporalops
+  labels:
+    app: web
+    role: canary
+spec:
+  # Starts at zero: the canary only exists during a deploy. ScaleCanary brings
+  # it up with the new image; ScaleDownCanary / Promote returns it to zero.
+  replicas: 0
+  selector:
+    matchLabels:
+      app: web
+      role: canary
+  template:
+    metadata:
+      labels:
+        app: web
+        role: canary
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: temporalops
+  labels:
+    app: web
+spec:
+  # Selects both stable and canary pods (no role selector), so requests are
+  # load-balanced across whatever replicas are up — the replica-ratio split.
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
