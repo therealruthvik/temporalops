@@ -18,9 +18,9 @@ type ReleaseInput struct {
 // ReleaseResult aggregates the children. Partial failure is never swallowed:
 // the caller can see exactly which services promoted and which did not.
 type ReleaseResult struct {
-	ReleaseID  string
-	Results    []CanaryResult
-	Promoted   []string
+	ReleaseID   string
+	Results     []CanaryResult
+	Promoted    []string
 	NotPromoted []string
 	AllPromoted bool
 }

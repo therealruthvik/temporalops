@@ -11,11 +11,11 @@ import (
 
 // CanaryInput is the request for a single-service canary deploy.
 type CanaryInput struct {
-	Service        string
-	ImageTag       string
-	TargetReplicas int
-	CanaryReplicas int
-	BakeSeconds    int
+	Service         string
+	ImageTag        string
+	TargetReplicas  int
+	CanaryReplicas  int
+	BakeSeconds     int
 	ApprovalTimeout time.Duration
 
 	// AutoPromote skips the per-canary human approval gate. It is used by the

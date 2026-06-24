@@ -14,34 +14,107 @@ recorded to a queryable audit log.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and rationale.
 
-## Status
+## What it does
 
-Built incrementally. Current stage: **3 — real Kubernetes against a kind cluster**.
+- Runs a progressive canary release as a durable Temporal workflow against a
+  real Kubernetes cluster (`client-go`), using a replica-ratio traffic model.
+- Gates every deploy on a Kyverno image policy before anything changes.
+- Rolls back automatically with a hand-written saga (LIFO compensation) on
+  health failure, traffic-shift failure, rejection, or approval timeout.
+- Pauses at a human approval gate (`approve-promote` signal) and auto-rolls-back
+  if no decision arrives within a configurable window — it never hangs.
+- Fans out multi-service releases as child workflows and surfaces per-service
+  outcomes without swallowing partial failures.
+- Records every activity and approval to an append-only, queryable SQLite audit
+  log tagged with workflow/run/timestamp/actor.
+- Survives worker crashes: killing the worker mid-deploy and restarting it
+  resumes from the last completed step with no duplicate side effects.
+- Exposes Temporal SDK metrics to Prometheus with an importable Grafana
+  dashboard.
 
-| Stage | Scope | Done |
-|------:|-------|:----:|
-| 1 | Temporal dev server + hello-world workflow | ✅ |
-| 2 | CanaryDeployWorkflow with mocked activities (saga, signal gate, timeout) | ✅ |
-| 3 | Real K8s API calls against a kind cluster | ✅ |
-| 4 | Kyverno policy check (signed/scanned image gate) | ✅ |
-| 5 | ReleaseOrchestratorWorkflow child fan-out | ✅ |
-| 6 | Append-only audit log (SQLite) | ✅ |
-| 7 | Chaos / fault injection + durability proof | ✅ |
-| 8 | Prometheus + Grafana | ✅ |
-| 4 | Kyverno policy check | |
-| 5 | ReleaseOrchestratorWorkflow child fan-out | |
-| 6 | Append-only audit log | |
-| 7 | Chaos / fault-injection scripts | |
-| 8 | Prometheus + Grafana | |
-| 9 | Demo script + architecture diagram | |
+It was built in nine incremental, independently verified stages — see the
+"How it works" sections below and the commit history.
+
+## The canary workflow
+
+```mermaid
+sequenceDiagram
+    participant Op as Operator
+    participant WF as CanaryDeployWorkflow
+    participant K8s as Kubernetes
+    participant Kyv as Kyverno
+
+    Op->>WF: start (service, image, replicas, bake)
+    WF->>Kyv: PolicyCheck (dry-run admission)
+    alt image not approved
+        Kyv-->>WF: denied
+        WF-->>Op: PolicyRejected (no changes made)
+    else admitted
+        WF->>K8s: ScaleCanary (push compensation)
+        WF->>K8s: HealthCheck / bake
+        alt unhealthy
+            WF->>K8s: ScaleDownCanary (compensate)
+            WF-->>Op: RolledBack
+        else healthy
+            WF->>K8s: ShiftTraffic (push compensation)
+            WF->>Op: await approve-promote signal
+            alt approved
+                WF->>K8s: Promote (full rollout)
+                WF-->>Op: Promoted
+            else rejected / timeout
+                WF->>K8s: ShiftTrafficBack, ScaleDownCanary
+                WF-->>Op: RolledBack / TimedOut
+            end
+        end
+    end
+```
 
 ## Prerequisites
 
 - Go 1.25+
 - [Temporal CLI](https://docs.temporal.io/cli) (`brew install temporal`)
-- Docker, kubectl, kind (used from Stage 3 onward)
+- Docker, kubectl, kind
 
-## Stage 1: run the hello-world workflow
+## Quick start
+
+```sh
+# 1. Cluster + sample app + image policy
+make cluster
+make kyverno
+
+# 2. Temporal dev server (Web UI on http://localhost:8233) — leave running
+make server
+
+# 3. Worker (registers workflows/activities, serves metrics on :9090) — leave running
+make worker
+
+# 4. Deploy a canary, then approve it
+make canary SERVICE=web TAG=nginx:1.27-alpine BAKE=15 APPROVAL=2m
+make approve ID=<workflow-id> ACTOR=alice
+make audit ID=<workflow-id>          # the compliance trail
+
+# 5. Durability proof: kill the worker mid-deploy and watch it resume
+make chaos-kill-worker
+
+# 6. Metrics (optional)
+make observe-up                      # Prometheus :9091, Grafana :3000
+```
+
+The unit tests (saga, signal gate, timeout, fan-out) need no infrastructure:
+
+```sh
+make test
+```
+
+The sections below document each capability and how to verify it.
+
+## How it works
+
+The project was built in nine incremental stages, each independently runnable
+and verified. The sections below walk through each one — what it adds, how to
+run it, and how to confirm it works.
+
+#### Stage 1: run the hello-world workflow
 
 Three terminals.
 
@@ -73,7 +146,7 @@ result: hello, temporalops
 The dev server runs in-memory by default, so state resets when you stop it.
 Durable-execution demos (Stage 7) document how to persist across restarts.
 
-## Stage 2: canary deploy workflow
+### Stage 2: canary deploy workflow
 
 `CanaryDeployWorkflow` runs the full release sequence with **mocked** activities
 (no real Kubernetes yet — that lands in Stage 3): policy gate, canary scale-up,
@@ -130,7 +203,7 @@ compensations and the AlertActivity in the event history.
 - Every activity has an explicit `RetryPolicy`; the rationale for each choice is
   commented at the definition in `internal/workflows/canary.go`.
 
-## Stage 3: real Kubernetes (kind)
+### Stage 3: real Kubernetes (kind)
 
 The activities now drive a real cluster via `client-go` instead of returning
 mocked results. The workflow, saga, and signal logic are unchanged — only the
@@ -178,7 +251,7 @@ stable.
 > as a no-op — so an activity retry or a post-crash re-run (Stage 7) produces no
 > duplicate side effect.
 
-## Stage 4: Kyverno policy gate
+### Stage 4: Kyverno policy gate
 
 `PolicyCheck` is now backed by a real Kyverno `ClusterPolicy`
 (`deploy/kyverno/require-approved-image.yaml`). The policy admits only images
@@ -208,7 +281,7 @@ denial (a 4xx admission rejection → reject) from an infra failure (network or
 deploy. Verified against kind: `busybox:1.36` is rejected by Kyverno;
 `nginx:1.27-alpine` is admitted and promotes.
 
-## Stage 5: multi-service releases
+### Stage 5: multi-service releases
 
 `ReleaseOrchestratorWorkflow` (`internal/workflows/orchestrator.go`) deploys
 several services at once. It **fans out** one `CanaryDeployWorkflow` child per
@@ -243,7 +316,7 @@ Design points:
 Verified against kind: a `web,api` release fans out two child workflows
 (`release-…-web`, `release-…-api`) that both promote, updating both Deployments.
 
-## Stage 6: append-only audit log
+### Stage 6: append-only audit log
 
 Every activity start/end and every approval decision is written to an
 append-only SQLite table (`internal/audit/`), tagged with workflow ID, run ID,
@@ -282,7 +355,7 @@ Writes are idempotent on `(workflow_id, run_id, activity_id, attempt, phase)`
 via `INSERT OR IGNORE`, so a retried workflow task never duplicates rows — the
 log stays trustworthy across the crashes exercised in Stage 7.
 
-## Stage 7: fault injection and the durability proof
+### Stage 7: fault injection and the durability proof
 
 This is the point of the project: the orchestration survives failures without
 losing state or producing duplicate side effects.
@@ -326,7 +399,7 @@ Each mode drives the workflow down a different resilience path and prints the
 resulting audit trail. The `--fail-*` flags inject the failure deterministically;
 the workflow's response is identical whether the dependency timed out or errored.
 
-## Stage 8: metrics with Prometheus and Grafana
+### Stage 8: metrics with Prometheus and Grafana
 
 The worker reports Temporal Go SDK metrics through a tally Prometheus reporter
 and serves them on `:9090/metrics` (`METRICS_ADDR` to override). Prometheus
@@ -354,9 +427,21 @@ individual workflow's event history during a demo; Grafana is the aggregate view
 ## Layout
 
 ```
-cmd/worker      Temporal worker process
-cmd/starter     CLI to start workflows and send signals
-internal/       workflows, activities (and later: audit, config)
-deploy/         compose, k8s manifests, kyverno, observability (later stages)
-scripts/        cluster setup, demo, chaos (later stages)
+cmd/worker              Temporal worker: registers workflows/activities,
+                        runs the audit interceptor, serves Prometheus metrics
+cmd/starter             CLI: canary, release, approve, status, audit, hello
+internal/workflows      CanaryDeployWorkflow, ReleaseOrchestratorWorkflow,
+                        saga compensation stack, signals/queries
+internal/activities     policy, scale, health, traffic, promote, alert,
+                        the client-go wrapper, and the audit activity
+internal/audit          append-only SQLite store + worker interceptor
+internal/config         env-tunable settings
+deploy/k8s              sample app (stable/canary Deployments + Service)
+deploy/kyverno          image policy (ClusterPolicy)
+deploy/observability    Prometheus + Grafana compose, config, dashboard
+scripts/                cluster/kyverno setup, demo, and chaos scripts
 ```
+
+Workflow code is kept strictly separate from activity code: Temporal requires
+workflow functions to be deterministic (no clocks, no I/O, no randomness), so
+all of that lives in activities.
