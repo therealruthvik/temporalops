@@ -6,6 +6,8 @@
 /audit/*.db
 /audit/*.jsonl
 /audit/*.db-journal
+/audit/*.db-wal
+/audit/*.db-shm
 
 # Temporal dev server state (if file-backed)
 *.sqlite
