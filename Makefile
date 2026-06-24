@@ -1,4 +1,4 @@
-.PHONY: deps server worker hello canary approve status test cluster cluster-reset cluster-down kyverno tidy fmt vet clean
+.PHONY: deps server worker hello canary release approve status test cluster cluster-reset cluster-down kyverno tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -30,6 +30,14 @@ canary:
 		--tag "$(or $(TAG),v2)" \
 		--bake "$(or $(BAKE),15)" \
 		--approval-timeout "$(or $(APPROVAL),15m)" $(EXTRA)
+
+# Stage 5: multi-service release. Fans out one canary per service.
+#   make release SERVICES=web,api TAG=nginx:1.27-alpine BAKE=15
+release:
+	go run ./cmd/starter release \
+		--services "$(or $(SERVICES),web,api)" \
+		--tag "$(or $(TAG),nginx:1.27-alpine)" \
+		--bake "$(or $(BAKE),15)"
 
 # Approve a waiting canary: make approve ID=<workflow-id> ACTOR=you
 approve:

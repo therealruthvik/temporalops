@@ -18,6 +18,12 @@ type CanaryInput struct {
 	BakeSeconds    int
 	ApprovalTimeout time.Duration
 
+	// AutoPromote skips the per-canary human approval gate. It is used by the
+	// ReleaseOrchestratorWorkflow, where approval is handled once at the release
+	// level rather than for each fanned-out service. A single-service deploy
+	// leaves this false and waits for the approve-promote signal.
+	AutoPromote bool
+
 	// Stage-2 simulation knobs. They let the chaos/demo scripts force each
 	// failure path without real infra. Removed once Stages 3-4 wire real K8s
 	// and Kyverno.
@@ -141,16 +147,21 @@ func CanaryDeployWorkflow(ctx workflow.Context, in CanaryInput) (CanaryResult, e
 	// hang: if no decision arrives within ApprovalTimeout, auto-rollback and
 	// finish as TimedOut. This bounds operator inattention — a forgotten
 	// canary cleans itself up instead of sitting half-deployed forever.
-	phase = "awaiting-approval"
-	signal, timedOut := waitForApproval(ctx, in.ApprovalTimeout)
-	res.Actor = signal.Actor
+	if in.AutoPromote {
+		// Release-level approval already happened; promote without waiting.
+		res.Actor = "auto-release"
+	} else {
+		phase = "awaiting-approval"
+		signal, timedOut := waitForApproval(ctx, in.ApprovalTimeout)
+		res.Actor = signal.Actor
 
-	switch {
-	case timedOut:
-		logger.Info("approval timed out, rolling back")
-		return unwind(ctx, saga, &res, StatusTimedOut, "no approval within "+in.ApprovalTimeout.String())
-	case !signal.Approve:
-		return unwind(ctx, saga, &res, StatusRolledBack, "promotion rejected by "+signal.Actor)
+		switch {
+		case timedOut:
+			logger.Info("approval timed out, rolling back")
+			return unwind(ctx, saga, &res, StatusTimedOut, "no approval within "+in.ApprovalTimeout.String())
+		case !signal.Approve:
+			return unwind(ctx, saga, &res, StatusRolledBack, "promotion rejected by "+signal.Actor)
+		}
 	}
 
 	// 6. Promote: full rollout to the target replica count.
@@ -166,8 +177,8 @@ func CanaryDeployWorkflow(ctx workflow.Context, in CanaryInput) (CanaryResult, e
 
 	phase = "promoted"
 	res.Status = StatusPromoted
-	res.Reason = "promoted to target replicas, approved by " + signal.Actor
-	logger.Info("canary promoted", "service", in.Service, "actor", signal.Actor)
+	res.Reason = "promoted to target replicas, approved by " + res.Actor
+	logger.Info("canary promoted", "service", in.Service, "actor", res.Actor)
 	return res, nil
 }
 

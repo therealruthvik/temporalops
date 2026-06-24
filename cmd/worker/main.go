@@ -32,6 +32,7 @@ func main() {
 
 	w.RegisterWorkflow(workflows.HelloWorkflow)
 	w.RegisterWorkflow(workflows.CanaryDeployWorkflow)
+	w.RegisterWorkflow(workflows.ReleaseOrchestratorWorkflow)
 
 	w.RegisterActivity(activities.Greet)
 	w.RegisterActivity(activities.PolicyCheck)

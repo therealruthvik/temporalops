@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/client"
@@ -43,6 +44,8 @@ func main() {
 		runHello(c, args)
 	case "canary":
 		runCanary(c, args)
+	case "release":
+		runRelease(c, args)
 	case "approve":
 		runApprove(c, args)
 	case "status":
@@ -53,7 +56,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: starter <hello|canary|approve|status> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: starter <hello|canary|release|approve|status> [flags]")
 	os.Exit(2)
 }
 
@@ -120,6 +123,54 @@ func runCanary(c client.Client, args []string) {
 			log.Fatalf("workflow result: %v", err)
 		}
 		log.Printf("result: status=%s actor=%s reason=%q", res.Status, res.Actor, res.Reason)
+	}
+}
+
+func runRelease(c client.Client, args []string) {
+	fs := flag.NewFlagSet("release", flag.ExitOnError)
+	services := fs.String("services", "web,api", "comma-separated service names")
+	tag := fs.String("tag", "nginx:1.27-alpine", "full image reference to deploy to every service")
+	replicas := fs.Int("replicas", 3, "target replica count per service")
+	canaryReplicas := fs.Int("canary-replicas", 1, "canary replica count per service")
+	bake := fs.Int("bake", 15, "bake duration in seconds")
+	_ = fs.Parse(args)
+
+	names := strings.Split(*services, ",")
+	specs := make([]workflows.CanaryInput, 0, len(names))
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		specs = append(specs, workflows.CanaryInput{
+			Service:        n,
+			ImageTag:       *tag,
+			TargetReplicas: *replicas,
+			CanaryReplicas: *canaryReplicas,
+			BakeSeconds:    *bake,
+			// Children promote at the release level; no per-canary gate.
+			AutoPromote: true,
+		})
+	}
+
+	releaseID := fmt.Sprintf("release-%d", time.Now().Unix())
+	in := workflows.ReleaseInput{ReleaseID: releaseID, Services: specs}
+	opts := client.StartWorkflowOptions{ID: releaseID, TaskQueue: workflows.TaskQueue}
+
+	we, err := c.ExecuteWorkflow(context.Background(), opts, workflows.ReleaseOrchestratorWorkflow, in)
+	if err != nil {
+		log.Fatalf("start release: %v", err)
+	}
+	log.Printf("started release id=%s services=%v", we.GetID(), names)
+
+	var res workflows.ReleaseResult
+	if err := we.Get(context.Background(), &res); err != nil {
+		log.Fatalf("release result: %v", err)
+	}
+	log.Printf("release complete: allPromoted=%v promoted=%v notPromoted=%v",
+		res.AllPromoted, res.Promoted, res.NotPromoted)
+	for _, r := range res.Results {
+		log.Printf("  %-8s %-14s %s", r.Service, r.Status, r.Reason)
 	}
 }
 

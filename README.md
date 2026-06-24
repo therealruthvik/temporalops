@@ -24,6 +24,7 @@ Built incrementally. Current stage: **3 — real Kubernetes against a kind clust
 | 2 | CanaryDeployWorkflow with mocked activities (saga, signal gate, timeout) | ✅ |
 | 3 | Real K8s API calls against a kind cluster | ✅ |
 | 4 | Kyverno policy check (signed/scanned image gate) | ✅ |
+| 5 | ReleaseOrchestratorWorkflow child fan-out | ✅ |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
 | 6 | Append-only audit log | |
@@ -203,6 +204,41 @@ denial (a 4xx admission rejection → reject) from an infra failure (network or
 5xx → retryable error), so a flaky API server retries rather than failing the
 deploy. Verified against kind: `busybox:1.36` is rejected by Kyverno;
 `nginx:1.27-alpine` is admitted and promotes.
+
+## Stage 5: multi-service releases
+
+`ReleaseOrchestratorWorkflow` (`internal/workflows/orchestrator.go`) deploys
+several services at once. It **fans out** one `CanaryDeployWorkflow` child per
+service (started concurrently), then **fans in** by waiting on every child and
+aggregating the outcomes. Each child is a full canary deploy with its own saga
+and durable history, independently visible in the Web UI.
+
+```sh
+make release SERVICES=web,api TAG=nginx:1.27-alpine BAKE=15
+```
+
+```
+release complete: allPromoted=true promoted=[web api] notPromoted=[]
+  web      Promoted   promoted to target replicas, approved by auto-release
+  api      Promoted   promoted to target replicas, approved by auto-release
+```
+
+Design points:
+
+- **Partial failure is surfaced, never swallowed.** The result lists `Promoted`
+  and `NotPromoted` services separately; one service rolling back does not fail
+  the others, and a child that errors outright is recorded as a failure for its
+  service rather than aborting the release. Covered by
+  `TestRelease_PartialFailureSurfaced`.
+- Orchestrated children set `AutoPromote`, so approval happens once at the
+  release level instead of per service. A single-service `canary` deploy still
+  uses the interactive approve-promote gate.
+- `ParentClosePolicy: TERMINATE` ties the children's lifetime to the release —
+  terminating the orchestrator stops the children rather than leaving orphaned
+  half-deploys.
+
+Verified against kind: a `web,api` release fans out two child workflows
+(`release-…-web`, `release-…-api`) that both promote, updating both Deployments.
 
 ## Layout
 
