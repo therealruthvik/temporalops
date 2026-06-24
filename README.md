@@ -26,6 +26,7 @@ Built incrementally. Current stage: **3 — real Kubernetes against a kind clust
 | 4 | Kyverno policy check (signed/scanned image gate) | ✅ |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | ✅ |
 | 6 | Append-only audit log (SQLite) | ✅ |
+| 7 | Chaos / fault injection + durability proof | ✅ |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
 | 6 | Append-only audit log | |
@@ -279,6 +280,50 @@ sqlite3 audit/audit.db \
 Writes are idempotent on `(workflow_id, run_id, activity_id, attempt, phase)`
 via `INSERT OR IGNORE`, so a retried workflow task never duplicates rows — the
 log stays trustworthy across the crashes exercised in Stage 7.
+
+## Stage 7: fault injection and the durability proof
+
+This is the point of the project: the orchestration survives failures without
+losing state or producing duplicate side effects.
+
+### Kill the worker mid-deploy
+
+```sh
+# prerequisites in other terminals: make cluster && make kyverno && make server
+make chaos-kill-worker
+```
+
+`scripts/chaos/kill-worker.sh` starts a canary with a long bake, kills the
+worker process mid-bake, then restarts it. On restart Temporal replays the
+workflow history:
+
+- completed activities (`PolicyCheck`, `ScaleCanary`) are **not** re-run — their
+  results are already in history;
+- the in-flight `HealthCheck` is retried after its timeout;
+- because the activities are idempotent (`scaleDeployment` is a no-op when
+  already at the desired count), the retry produces **no extra side effect**.
+
+The workflow then proceeds to promotion as if nothing happened. The audit trail
+shows `ScaleCanary` recorded once and `HealthCheck` re-attempted after the
+crash; the Web UI (`:8233`) shows the gap in the event history and the resumed
+execution.
+
+This works because the worker is stateless: all workflow state lives in
+Temporal's event history, not in the worker process. Killing the worker is
+survivable by construction; the worker binary is run from `./bin/worker`
+(`make build`) so it has a clean PID to signal.
+
+### Inject each failure path
+
+```sh
+scripts/chaos/inject.sh kyverno   # Kyverno blocks the image  -> PolicyRejected (no compensation)
+scripts/chaos/inject.sh k8s       # K8s API fails on traffic shift -> retries -> RolledBack
+scripts/chaos/inject.sh signal    # approval never arrives    -> TimedOut (auto-rollback)
+```
+
+Each mode drives the workflow down a different resilience path and prints the
+resulting audit trail. The `--fail-*` flags inject the failure deterministically;
+the workflow's response is identical whether the dependency timed out or errored.
 
 ## Layout
 

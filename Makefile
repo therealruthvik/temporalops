@@ -1,4 +1,4 @@
-.PHONY: deps server worker hello canary release approve status audit test cluster cluster-reset cluster-down kyverno tidy fmt vet clean
+.PHONY: deps build server worker hello canary release approve status audit test cluster cluster-reset cluster-down kyverno chaos-kill-worker tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -8,6 +8,13 @@ server:
 # Install/refresh Go module dependencies.
 deps:
 	go mod download
+
+# Compile the binaries into ./bin. The chaos scripts run ./bin/worker directly
+# (rather than `go run`, whose child binary outlives the parent on kill) so the
+# worker has a controllable PID for the durability demo.
+build:
+	go build -o bin/worker ./cmd/worker
+	go build -o bin/starter ./cmd/starter
 
 tidy:
 	go mod tidy
@@ -63,6 +70,12 @@ cluster:
 # Stage 4: install Kyverno and apply the image policy (idempotent).
 kyverno:
 	./scripts/install-kyverno.sh
+
+# Stage 7: durability proof — kill the worker mid-deploy and show the workflow
+# resume on restart with no duplicate side effects. Requires `make server` and a
+# cluster (make cluster && make kyverno) to be up.
+chaos-kill-worker: build
+	./scripts/chaos/kill-worker.sh
 
 # Reset the sample app to its baseline (stable image, canary at zero).
 cluster-reset:

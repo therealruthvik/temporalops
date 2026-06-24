@@ -119,6 +119,7 @@ func runHello(c client.Client, args []string) {
 
 func runCanary(c client.Client, args []string) {
 	fs := flag.NewFlagSet("canary", flag.ExitOnError)
+	wfID := fs.String("id", "", "explicit workflow id (default: canary-<service>-<unix>)")
 	service := fs.String("service", "web", "service name")
 	tag := fs.String("tag", "nginx:1.27-alpine", "full image reference to deploy as the canary")
 	replicas := fs.Int("replicas", 3, "target replica count")
@@ -144,8 +145,11 @@ func runCanary(c client.Client, args []string) {
 		SimulateTrafficFail:  *failTraffic,
 	}
 
-	wfID := fmt.Sprintf("canary-%s-%d", *service, time.Now().Unix())
-	opts := client.StartWorkflowOptions{ID: wfID, TaskQueue: workflows.TaskQueue}
+	id := *wfID
+	if id == "" {
+		id = fmt.Sprintf("canary-%s-%d", *service, time.Now().Unix())
+	}
+	opts := client.StartWorkflowOptions{ID: id, TaskQueue: workflows.TaskQueue}
 
 	we, err := c.ExecuteWorkflow(context.Background(), opts, workflows.CanaryDeployWorkflow, in)
 	if err != nil {
