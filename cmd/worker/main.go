@@ -31,7 +31,17 @@ func main() {
 	w := worker.New(c, workflows.TaskQueue, worker.Options{})
 
 	w.RegisterWorkflow(workflows.HelloWorkflow)
+	w.RegisterWorkflow(workflows.CanaryDeployWorkflow)
+
 	w.RegisterActivity(activities.Greet)
+	w.RegisterActivity(activities.PolicyCheck)
+	w.RegisterActivity(activities.ScaleCanary)
+	w.RegisterActivity(activities.ScaleDownCanary)
+	w.RegisterActivity(activities.HealthCheck)
+	w.RegisterActivity(activities.ShiftTraffic)
+	w.RegisterActivity(activities.ShiftTrafficBack)
+	w.RegisterActivity(activities.Promote)
+	w.RegisterActivity(activities.Alert)
 
 	log.Printf("worker polling task queue %q at %s", workflows.TaskQueue, hostPort)
 	if err := w.Run(worker.InterruptCh()); err != nil {

@@ -1,6 +1,11 @@
-// Command starter kicks off workflows from the CLI and waits for the result.
-// In Stage 1 it only drives HelloWorkflow; later stages extend it to start
-// CanaryDeployWorkflow, send the approve-promote signal, and query state.
+// Command starter drives workflows from the CLI: start a canary deploy, send
+// the approve-promote signal, query live status, or run the Stage-1 hello
+// smoke test.
+//
+//	starter canary  --service web --tag v2 --replicas 3 --bake 15 --approval-timeout 15m
+//	starter approve --id <workflow-id> --actor alice [--reject]
+//	starter status  --id <workflow-id>
+//	starter hello   --name world
 package main
 
 import (
@@ -17,34 +22,143 @@ import (
 )
 
 func main() {
-	name := flag.String("name", "world", "name to greet")
-	flag.Parse()
+	if len(os.Args) < 2 {
+		usage()
+	}
+	cmd := os.Args[1]
+	args := os.Args[2:]
 
 	hostPort := os.Getenv("TEMPORAL_ADDRESS")
 	if hostPort == "" {
 		hostPort = client.DefaultHostPort
 	}
-
 	c, err := client.Dial(client.Options{HostPort: hostPort})
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)
 	}
 	defer c.Close()
 
+	switch cmd {
+	case "hello":
+		runHello(c, args)
+	case "canary":
+		runCanary(c, args)
+	case "approve":
+		runApprove(c, args)
+	case "status":
+		runStatus(c, args)
+	default:
+		usage()
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: starter <hello|canary|approve|status> [flags]")
+	os.Exit(2)
+}
+
+func runHello(c client.Client, args []string) {
+	fs := flag.NewFlagSet("hello", flag.ExitOnError)
+	name := fs.String("name", "world", "name to greet")
+	_ = fs.Parse(args)
+
 	opts := client.StartWorkflowOptions{
 		ID:        fmt.Sprintf("hello-%d", time.Now().Unix()),
 		TaskQueue: workflows.TaskQueue,
 	}
-
 	we, err := c.ExecuteWorkflow(context.Background(), opts, workflows.HelloWorkflow, *name)
 	if err != nil {
 		log.Fatalf("start workflow: %v", err)
 	}
-	log.Printf("started workflow id=%s run=%s", we.GetID(), we.GetRunID())
-
 	var result string
 	if err := we.Get(context.Background(), &result); err != nil {
 		log.Fatalf("workflow result: %v", err)
 	}
 	log.Printf("result: %s", result)
+}
+
+func runCanary(c client.Client, args []string) {
+	fs := flag.NewFlagSet("canary", flag.ExitOnError)
+	service := fs.String("service", "web", "service name")
+	tag := fs.String("tag", "v2", "image tag to deploy")
+	replicas := fs.Int("replicas", 3, "target replica count")
+	canaryReplicas := fs.Int("canary-replicas", 1, "canary replica count")
+	bake := fs.Int("bake", 15, "bake duration in seconds")
+	approvalTimeout := fs.Duration("approval-timeout", 15*time.Minute, "auto-rollback if unapproved within this window")
+	wait := fs.Bool("wait", false, "block and print the final result")
+	// Stage-2 failure injection (removed once real K8s/Kyverno land).
+	failPolicy := fs.Bool("fail-policy", false, "simulate Kyverno rejection")
+	failHealth := fs.Bool("fail-health", false, "simulate unhealthy canary")
+	failTraffic := fs.Bool("fail-traffic", false, "simulate traffic-shift failure")
+	_ = fs.Parse(args)
+
+	in := workflows.CanaryInput{
+		Service:              *service,
+		ImageTag:             *tag,
+		TargetReplicas:       *replicas,
+		CanaryReplicas:       *canaryReplicas,
+		BakeSeconds:          *bake,
+		ApprovalTimeout:      *approvalTimeout,
+		SimulatePolicyReject: *failPolicy,
+		SimulateHealthFail:   *failHealth,
+		SimulateTrafficFail:  *failTraffic,
+	}
+
+	wfID := fmt.Sprintf("canary-%s-%d", *service, time.Now().Unix())
+	opts := client.StartWorkflowOptions{ID: wfID, TaskQueue: workflows.TaskQueue}
+
+	we, err := c.ExecuteWorkflow(context.Background(), opts, workflows.CanaryDeployWorkflow, in)
+	if err != nil {
+		log.Fatalf("start canary: %v", err)
+	}
+	log.Printf("started canary workflow id=%s run=%s", we.GetID(), we.GetRunID())
+	log.Printf("approve with: starter approve --id %s --actor <you>", we.GetID())
+
+	if *wait {
+		var res workflows.CanaryResult
+		if err := we.Get(context.Background(), &res); err != nil {
+			log.Fatalf("workflow result: %v", err)
+		}
+		log.Printf("result: status=%s actor=%s reason=%q", res.Status, res.Actor, res.Reason)
+	}
+}
+
+func runApprove(c client.Client, args []string) {
+	fs := flag.NewFlagSet("approve", flag.ExitOnError)
+	id := fs.String("id", "", "workflow id")
+	actor := fs.String("actor", "", "who is approving (recorded for audit)")
+	reject := fs.Bool("reject", false, "reject the promotion instead of approving")
+	_ = fs.Parse(args)
+	if *id == "" || *actor == "" {
+		log.Fatal("--id and --actor are required")
+	}
+
+	sig := workflows.ApprovalSignal{Approve: !*reject, Actor: *actor}
+	if err := c.SignalWorkflow(context.Background(), *id, "", workflows.ApprovePromoteSignal, sig); err != nil {
+		log.Fatalf("signal workflow: %v", err)
+	}
+	verb := "approved"
+	if *reject {
+		verb = "rejected"
+	}
+	log.Printf("%s promotion for %s as %s", verb, *id, *actor)
+}
+
+func runStatus(c client.Client, args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	id := fs.String("id", "", "workflow id")
+	_ = fs.Parse(args)
+	if *id == "" {
+		log.Fatal("--id is required")
+	}
+
+	resp, err := c.QueryWorkflow(context.Background(), *id, "", workflows.CanaryStatusQuery)
+	if err != nil {
+		log.Fatalf("query workflow: %v", err)
+	}
+	var phase string
+	if err := resp.Get(&phase); err != nil {
+		log.Fatalf("decode query result: %v", err)
+	}
+	log.Printf("phase: %s", phase)
 }

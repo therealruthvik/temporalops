@@ -16,12 +16,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and rationale.
 
 ## Status
 
-Built incrementally. Current stage: **1 — Temporal dev server + hello-world**.
+Built incrementally. Current stage: **2 — CanaryDeployWorkflow (mocked activities)**.
 
 | Stage | Scope | Done |
 |------:|-------|:----:|
 | 1 | Temporal dev server + hello-world workflow | ✅ |
-| 2 | CanaryDeployWorkflow with mocked activities (saga, signal gate, timeout) | |
+| 2 | CanaryDeployWorkflow with mocked activities (saga, signal gate, timeout) | ✅ |
 | 3 | Real K8s API calls against a kind cluster | |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
@@ -67,6 +67,63 @@ result: hello, temporalops
 
 The dev server runs in-memory by default, so state resets when you stop it.
 Durable-execution demos (Stage 7) document how to persist across restarts.
+
+## Stage 2: canary deploy workflow
+
+`CanaryDeployWorkflow` runs the full release sequence with **mocked** activities
+(no real Kubernetes yet — that lands in Stage 3): policy gate, canary scale-up,
+health bake, traffic shift, human approval gate, and promotion, with a
+hand-written saga that rolls back in reverse order on any failure.
+
+Key behaviours, all covered by unit tests in
+`internal/workflows/canary_test.go` (run `make test`, no infra needed):
+
+| Scenario | Outcome |
+|----------|---------|
+| All steps pass, promotion approved | `Promoted` |
+| Image fails the policy gate | `PolicyRejected` (no compensation — nothing changed yet) |
+| Canary bakes unhealthy | `RolledBack` (canary scaled back down) |
+| Traffic shifted, no approval before timeout | `TimedOut` (traffic shifted back, then scaled down) |
+| Promotion explicitly rejected | `RolledBack` |
+
+### Run it against the dev server
+
+With the dev server (`make server`) and worker (`make worker`) running:
+
+```sh
+# Start a canary. Prints the workflow ID and the approve command to copy.
+make canary SERVICE=web TAG=v2 BAKE=15 APPROVAL=2m
+
+# Watch its phase advance (policy-check -> ... -> awaiting-approval)
+make status ID=<workflow-id>
+
+# Approve the promotion (recorded as the actor, for the Stage 6 audit log)
+make approve ID=<workflow-id> ACTOR=alice
+```
+
+Inject failures to watch the saga roll back. `EXTRA` is passed through to the
+starter:
+
+```sh
+make canary SERVICE=api EXTRA="--fail-health"    # -> RolledBack
+make canary SERVICE=db  EXTRA="--fail-policy"    # -> PolicyRejected
+make canary SERVICE=cache APPROVAL=15s           # don't approve -> TimedOut
+```
+
+Open the workflow in the Web UI (http://localhost:8233) to see the saga
+compensations and the AlertActivity in the event history.
+
+#### Design notes
+
+- A rollback or timeout is returned as a **normal workflow result** with a
+  `RolledBack` / `TimedOut` status, not a workflow error — the workflow
+  succeeded at its job of deploying safely. Only an unrecoverable infra error
+  after retries fails the workflow.
+- The saga compensation stack is hand-written (`internal/workflows/saga.go`),
+  not a library, so the rollback ordering is explicit. Compensations run on a
+  disconnected context so they complete even during cancellation.
+- Every activity has an explicit `RetryPolicy`; the rationale for each choice is
+  commented at the definition in `internal/workflows/canary.go`.
 
 ## Layout
 

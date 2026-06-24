@@ -2,7 +2,10 @@ module github.com/therealruthvik/temporalops
 
 go 1.25
 
-require go.temporal.io/sdk v1.36.0
+require (
+	github.com/stretchr/testify v1.10.0
+	go.temporal.io/sdk v1.36.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -16,7 +19,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
 	go.temporal.io/api v1.51.0 // indirect
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
