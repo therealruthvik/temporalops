@@ -1,4 +1,4 @@
-.PHONY: deps build server worker hello canary release approve status audit test cluster cluster-reset cluster-down kyverno chaos-kill-worker observe-up observe-down tidy fmt vet clean
+.PHONY: deps build server worker hello canary release approve status audit test verify verify-static cluster cluster-reset cluster-down kyverno chaos-kill-worker observe-up observe-down tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -62,6 +62,15 @@ audit:
 # Run the workflow unit tests (saga, signal gate, timeout — no infra needed).
 test:
 	go test ./...
+
+# Verification suite. Static checks + unit tests always; the live end-to-end
+# checks run if the kind cluster is up. Use `make verify-static` for just the
+# offline checks. Stop any `make worker` first — verify manages its own.
+verify:
+	./scripts/verify.sh
+
+verify-static:
+	./scripts/verify.sh --static
 
 # Stage 3: create the kind cluster and deploy the sample app (idempotent).
 cluster:

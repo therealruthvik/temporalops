@@ -100,11 +100,37 @@ make chaos-kill-worker
 make observe-up                      # Prometheus :9091, Grafana :3000
 ```
 
-The unit tests (saga, signal gate, timeout, fan-out) need no infrastructure:
+The unit tests (saga, signal gate, timeout, fan-out, audit store, policy
+classification) need no infrastructure:
 
 ```sh
 make test
 ```
+
+## Verifying the build
+
+`scripts/verify.sh` is a self-checking suite that reports `PASS`/`FAIL` per
+check and a final verdict.
+
+```sh
+make verify-static     # offline: tooling, go build, go vet, gofmt, unit tests
+make verify            # the above plus the live end-to-end checks (if the cluster is up)
+```
+
+The static tier always runs. The live tier runs automatically when the kind
+cluster is reachable; it manages its own Temporal dev server and worker (so stop
+any `make worker` first) and asserts:
+
+- every workflow outcome — `Promoted`, `PolicyRejected`, `RolledBack`,
+  `TimedOut`, and a multi-service `allPromoted` release;
+- the audit log records the run and tags the approval with the actor;
+- the worker exposes `temporal_workflow_completed` on `:9090/metrics`;
+- the durability proof — the worker is killed mid-bake and the workflow resumes
+  to `Promoted`, with the audit log confirming `HealthCheck` was retried and
+  `ScaleCanary` ran exactly once.
+
+`make verify` exits non-zero if any check fails. Use `scripts/verify.sh --quick`
+to run the live checks but skip the ~90s durability test.
 
 The sections below document each capability and how to verify it.
 
