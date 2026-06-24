@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The TemporalOps worker exposes Temporal Go SDK metrics on :9090/metrics.
+  # The worker runs on the host (via `make worker`), so from inside the
+  # Prometheus container it is reachable at host.docker.internal.
+  - job_name: temporalops-worker
+    static_configs:
+      - targets:
+          - host.docker.internal:9090
+        labels:
+          service: temporalops-worker

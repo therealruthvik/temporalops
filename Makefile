@@ -1,4 +1,4 @@
-.PHONY: deps build server worker hello canary release approve status audit test cluster cluster-reset cluster-down kyverno chaos-kill-worker tidy fmt vet clean
+.PHONY: deps build server worker hello canary release approve status audit test cluster cluster-reset cluster-down kyverno chaos-kill-worker observe-up observe-down tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -76,6 +76,15 @@ kyverno:
 # cluster (make cluster && make kyverno) to be up.
 chaos-kill-worker: build
 	./scripts/chaos/kill-worker.sh
+
+# Stage 8: bring up Prometheus + Grafana. Prometheus scrapes the worker's SDK
+# metrics on :9090; Grafana (http://localhost:3000) is pre-provisioned with the
+# data source and the TemporalOps dashboard.
+observe-up:
+	docker compose -f deploy/observability/docker-compose.yml up -d
+
+observe-down:
+	docker compose -f deploy/observability/docker-compose.yml down
 
 # Reset the sample app to its baseline (stable image, canary at zero).
 cluster-reset:

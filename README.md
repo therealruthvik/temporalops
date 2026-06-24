@@ -27,6 +27,7 @@ Built incrementally. Current stage: **3 — real Kubernetes against a kind clust
 | 5 | ReleaseOrchestratorWorkflow child fan-out | ✅ |
 | 6 | Append-only audit log (SQLite) | ✅ |
 | 7 | Chaos / fault injection + durability proof | ✅ |
+| 8 | Prometheus + Grafana | ✅ |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
 | 6 | Append-only audit log | |
@@ -324,6 +325,31 @@ scripts/chaos/inject.sh signal    # approval never arrives    -> TimedOut (auto-
 Each mode drives the workflow down a different resilience path and prints the
 resulting audit trail. The `--fail-*` flags inject the failure deterministically;
 the workflow's response is identical whether the dependency timed out or errored.
+
+## Stage 8: metrics with Prometheus and Grafana
+
+The worker reports Temporal Go SDK metrics through a tally Prometheus reporter
+and serves them on `:9090/metrics` (`METRICS_ADDR` to override). Prometheus
+scrapes the worker; Grafana ships pre-provisioned with the data source and a
+dashboard.
+
+```sh
+make worker        # exposes metrics on :9090/metrics
+make observe-up    # Prometheus :9091, Grafana :3000 (admin/admin)
+# ... run some deploys (make canary / make release) ...
+# open http://localhost:3000 -> Dashboards -> TemporalOps
+make observe-down
+```
+
+The dashboard (`deploy/observability/grafana/dashboards/temporalops.json`,
+importable on its own) shows workflow completion/failure counts, active workflow
+executions (worker cache size), activity retry/failure counts, and activity and
+end-to-end latency percentiles. The panels are built on the real SDK series —
+`temporal_workflow_completed`, `temporal_activity_execution_failed`,
+`temporal_activity_execution_latency`, `temporal_workflow_endtoend_latency`.
+
+The Temporal **Web UI** (`http://localhost:8233`) remains the place to inspect an
+individual workflow's event history during a demo; Grafana is the aggregate view.
 
 ## Layout
 

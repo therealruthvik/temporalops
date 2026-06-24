@@ -1,0 +1,117 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "title": "TemporalOps",
+  "tags": ["temporal", "temporalops"],
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "10s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Workflows completed (total)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(temporal_workflow_completed)" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Workflows failed (total)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(temporal_workflow_failed) or vector(0)" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Active workflow executions (worker cache)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(temporal_sticky_cache_size)" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Activity retries / failures (total)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(temporal_activity_execution_failed) or vector(0)" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Workflow completion rate by type",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(temporal_workflow_completed[1m])) by (workflow_type)", "legendFormat": "{{workflow_type}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Activity retries/failures by activity",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(temporal_activity_execution_failed[1m])) by (activity_type)", "legendFormat": "{{activity_type}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Activity execution latency p95 (s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(temporal_activity_execution_latency{quantile=\"0.95\"}) by (activity_type)", "legendFormat": "{{activity_type}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Workflow end-to-end latency p95 (s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 }, "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "max(temporal_workflow_endtoend_latency{quantile=\"0.95\"}) by (workflow_type)", "legendFormat": "{{workflow_type}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Worker task slots in use",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(temporal_worker_task_slots_used) by (worker_type)", "legendFormat": "{{worker_type}}" }
+      ]
+    }
+  ]
+}

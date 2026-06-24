@@ -7,9 +7,15 @@ package main
 
 import (
 	"log"
+	"net/http"
+	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/uber-go/tally/v4"
+	promreporter "github.com/uber-go/tally/v4/prometheus"
 	"go.temporal.io/sdk/client"
+	sdktally "go.temporal.io/sdk/contrib/tally"
 	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 
@@ -17,7 +23,6 @@ import (
 	"github.com/therealruthvik/temporalops/internal/audit"
 	"github.com/therealruthvik/temporalops/internal/config"
 	"github.com/therealruthvik/temporalops/internal/workflows"
-	"os"
 )
 
 func main() {
@@ -38,7 +43,31 @@ func main() {
 	defer store.Close()
 	audit.SetDefault(store)
 
-	c, err := client.Dial(client.Options{HostPort: hostPort})
+	// Expose Temporal SDK metrics to Prometheus. The SDK reports through a
+	// tally scope backed by a Prometheus reporter; the reporter's HTTP handler
+	// is served on /metrics for Prometheus to scrape.
+	reporter := promreporter.NewReporter(promreporter.Options{})
+	scope, scopeCloser := tally.NewRootScope(tally.ScopeOptions{
+		CachedReporter:  reporter,
+		Separator:       promreporter.DefaultSeparator,
+		SanitizeOptions: &sdktally.PrometheusSanitizeOptions,
+	}, time.Second)
+	defer scopeCloser.Close()
+
+	metricsAddr := config.MetricsAddr()
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", reporter.HTTPHandler())
+		log.Printf("serving Prometheus metrics on %s/metrics", metricsAddr)
+		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+			log.Printf("metrics server stopped: %v", err)
+		}
+	}()
+
+	c, err := client.Dial(client.Options{
+		HostPort:       hostPort,
+		MetricsHandler: sdktally.NewMetricsHandler(scope),
+	})
 	if err != nil {
 		log.Fatalf("dial temporal: %v", err)
 	}
