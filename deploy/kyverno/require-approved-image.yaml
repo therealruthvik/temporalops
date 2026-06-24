@@ -1,0 +1,38 @@
+# Pre-deploy policy gate. Stands in for "the image is signed/scanned": only
+# images from the approved/vetted repository (nginx) may run in the temporalops
+# namespace. Anything else (an unreviewed third-party image) is denied at
+# admission. The CanaryDeployWorkflow's PolicyCheck activity dry-run-applies the
+# candidate image and treats a Kyverno denial as a failed policy gate.
+#
+# In a real setup this rule would be a Kyverno `verifyImages` cosign check; the
+# allow-list keeps the demo runnable offline while exercising the exact same
+# admission-denial path.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-approved-image
+  annotations:
+    policies.kyverno.io/title: Require Approved Image
+    policies.kyverno.io/description: >-
+      Deployments in the temporalops namespace may only run images from the
+      approved registry. Represents a signed/scanned image gate.
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: only-approved-registry
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+              namespaces:
+                - temporalops
+      validate:
+        message: "image is not from the approved/scanned registry (allowed: nginx:*)"
+        pattern:
+          spec:
+            template:
+              spec:
+                containers:
+                  - image: "nginx:*"

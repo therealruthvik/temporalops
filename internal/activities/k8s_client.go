@@ -2,9 +2,11 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -96,6 +98,48 @@ func setImage(ctx context.Context, name, image string) error {
 		return fmt.Errorf("patch image %s -> %s: %w", name, image, err)
 	}
 	return nil
+}
+
+// dryRunSetImage applies a setImage patch with DryRun=All. The mutation is
+// validated by the API server (and therefore by Kyverno's admission webhook)
+// but never persisted. A nil error means the image would be admitted; a
+// non-nil error means it was rejected (policy) or the call failed (infra) —
+// classifyAdmissionError separates those.
+func dryRunSetImage(ctx context.Context, name, image string) error {
+	c, err := k8sClient()
+	if err != nil {
+		return err
+	}
+	patch := fmt.Sprintf(
+		`{"spec":{"template":{"spec":{"containers":[{"name":%q,"image":%q}]}}}}`,
+		containerName, image,
+	)
+	_, err = c.AppsV1().Deployments(Namespace).Patch(
+		ctx, name, types.StrategicMergePatchType, []byte(patch),
+		metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}},
+	)
+	return err
+}
+
+// isInfraError reports whether a Kubernetes API error is a transient
+// infrastructure failure (worth retrying) rather than a deterministic policy
+// denial. Network errors (not structured API errors) and 5xx/timeout/throttle
+// statuses are infra; a NotFound means the target Deployment is missing, which
+// retrying will not fix but which is a setup error, not a policy decision, so
+// it is surfaced as an error too. Everything else (a 4xx admission denial) is
+// treated as a policy rejection by the caller.
+func isInfraError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsServerTimeout(err) || apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsTimeout(err) || apierrors.IsInternalError(err) ||
+		apierrors.IsTooManyRequests(err) || apierrors.IsNotFound(err) {
+		return true
+	}
+	// A non-structured error is a transport/network problem -> infra.
+	var status apierrors.APIStatus
+	return !errors.As(err, &status)
 }
 
 // deploymentStatus returns the ready and desired replica counts, used by the

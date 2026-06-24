@@ -1,4 +1,4 @@
-.PHONY: deps server worker hello canary approve status test cluster cluster-reset cluster-down tidy fmt vet clean
+.PHONY: deps server worker hello canary approve status test cluster cluster-reset cluster-down kyverno tidy fmt vet clean
 
 # Start the Temporal dev server (in-memory) with the Web UI on :8233 and the
 # frontend gRPC on :7233. Run this in its own terminal; leave it running.
@@ -46,6 +46,10 @@ test:
 # Stage 3: create the kind cluster and deploy the sample app (idempotent).
 cluster:
 	./scripts/setup-cluster.sh
+
+# Stage 4: install Kyverno and apply the image policy (idempotent).
+kyverno:
+	./scripts/install-kyverno.sh
 
 # Reset the sample app to its baseline (stable image, canary at zero).
 cluster-reset:

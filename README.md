@@ -23,6 +23,7 @@ Built incrementally. Current stage: **3 — real Kubernetes against a kind clust
 | 1 | Temporal dev server + hello-world workflow | ✅ |
 | 2 | CanaryDeployWorkflow with mocked activities (saga, signal gate, timeout) | ✅ |
 | 3 | Real K8s API calls against a kind cluster | ✅ |
+| 4 | Kyverno policy check (signed/scanned image gate) | ✅ |
 | 4 | Kyverno policy check | |
 | 5 | ReleaseOrchestratorWorkflow child fan-out | |
 | 6 | Append-only audit log | |
@@ -172,6 +173,36 @@ stable.
 > count already matches observed state, and `setImage` re-applies the same image
 > as a no-op — so an activity retry or a post-crash re-run (Stage 7) produces no
 > duplicate side effect.
+
+## Stage 4: Kyverno policy gate
+
+`PolicyCheck` is now backed by a real Kyverno `ClusterPolicy`
+(`deploy/kyverno/require-approved-image.yaml`). The policy admits only images
+from the approved registry (`nginx:*`) into the `temporalops` namespace — a
+stand-in for a signed/scanned-image gate. The activity dry-run-applies the
+candidate image to the canary Deployment, so the API server runs it through
+Kyverno's admission webhook without persisting anything; a denial is a failed
+gate.
+
+```sh
+make kyverno     # install Kyverno + apply the policy (server-side apply)
+```
+
+```sh
+# Unapproved image -> denied at admission -> workflow aborts, no compensation
+make canary SERVICE=web TAG=busybox:1.36
+# -> PolicyRejected ("admission webhook ... denied the request ... require-approved-image")
+
+# Approved image -> admitted, deploy proceeds to the bake/approval gate
+make canary SERVICE=web TAG=nginx:1.27-alpine
+```
+
+A policy rejection is deterministic, so it returns `PolicyRejected` with **no
+saga compensation** — nothing was changed. The activity distinguishes a policy
+denial (a 4xx admission rejection → reject) from an infra failure (network or
+5xx → retryable error), so a flaky API server retries rather than failing the
+deploy. Verified against kind: `busybox:1.36` is rejected by Kyverno;
+`nginx:1.27-alpine` is admitted and promotes.
 
 ## Layout
 
